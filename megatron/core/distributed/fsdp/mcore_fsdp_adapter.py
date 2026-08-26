@@ -41,6 +41,7 @@ from megatron.core.distributed.distributed_data_parallel_config import Distribut
 from megatron.core.models.common.combined_1f1b_mfsdp_scheduler import register_combined_1f1b_hooks
 from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.ssm.mamba_layer import MambaLayer
+from megatron.core.transformer.experimental_attention_variant.dsa import DSAttention
 from megatron.core.transformer.moe.moe_layer import MoELayer
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.transformer.transformer_layer import MoETransformerLayer, TransformerLayer
@@ -160,6 +161,15 @@ class FullyShardedDataParallelV1(_BaseDataParallel):
         config: TransformerConfig, ddp_config: DistributedDataParallelConfig
     ) -> Tuple[Type[nn.Module], ...]:
         """Module classes needing ``parameters(recurse=True)`` for fine-grained hooks."""
+        recurse_types: List[Type[nn.Module]] = []
+
+        if config.dsa_indexer_weights_proj_output_dtype == "fp32":
+            # BF16 calls linear_weights_proj as a module and uses its leaf FSDP hooks. FP32 invokes
+            # custom autograd with the weight directly, and its forward readiness check cannot
+            # provide a pre-backward unshard hook. Since DSAttention also calls the indexer method
+            # directly, recurse from the enclosing DSAttention boundary for both passes.
+            recurse_types.append(DSAttention)
+
         if config.overlap_moe_expert_parallel_comm and any_sharding_strategy_in(
             ddp_config, ["optim_grads_params"]
         ):
@@ -167,8 +177,8 @@ class FullyShardedDataParallelV1(_BaseDataParallel):
             from megatron.core.transformer.moe.experts import TEGroupedMLP
             from megatron.core.transformer.moe.shared_experts import SharedExpertMLP
 
-            return (TEGroupedMLP, SharedExpertMLP)
-        return ()
+            recurse_types.extend((TEGroupedMLP, SharedExpertMLP))
+        return tuple(recurse_types)
 
     def __init__(
         self,
