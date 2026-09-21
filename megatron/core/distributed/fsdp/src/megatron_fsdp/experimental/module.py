@@ -31,7 +31,7 @@ from .countdown import Countdown
 from .indexed_order import IndexedOrder
 from .module_utils import get_parameter_owner
 from .parameter_group import FsdpParameterGroup, get_containing_parameter_group
-from .placement import Flat
+from .placement import RowAtomic
 from .schedule import SchedulePolicy
 
 
@@ -630,7 +630,7 @@ def _specialize_placements(
     """Specialize public placements for one homogeneous parameter group.
 
     Today every parameter group maps Torch's user-facing ``Shard(0)`` to the
-    DBuffer-specific ``Flat`` format. This dtype-homogeneous group boundary is
+    DBuffer-specific ``RowAtomic`` format. This dtype-homogeneous group boundary is
     where MXFP8 groups will instead select ``BlockAtomic``.
     """
     if dtype not in (torch.float32, torch.bfloat16, torch.float16):
@@ -640,4 +640,4 @@ def _specialize_placements(
             raise NotImplementedError(
                 "MFSDP currently supports only dim-0 Shard placements, " f"got {placement!r}."
             )
-    return tuple(Flat() if type(placement) is Shard else placement for placement in placements)
+    return tuple(RowAtomic() if type(placement) is Shard else placement for placement in placements)
