@@ -53,6 +53,11 @@ from megatron.core.transformer.utils import (
     make_sharded_tensors_for_checkpoint,
     sharded_state_dict_default,
 )
+from megatron.core.transformer.wide_residual_layer import (
+    build_wide_residual_readout,
+    expand_wide_residual_stream,
+)
+from megatron.core.typed_torch import apply_module
 from megatron.core.utils import WrappedTensor, deprecate_inference_params, make_viewless_tensor
 
 
@@ -152,6 +157,7 @@ class HybridStack(MegatronModule):
         self.post_layer_norm = post_layer_norm
         self.post_process = post_process
         self.is_mtp_layer = is_mtp_layer
+        self.uses_wide_residual_stream = self.config.wide_residual is not None
         boundary_layout = (
             self.config.linear_cp_layout if boundary_layout is None else boundary_layout
         )
@@ -303,6 +309,14 @@ class HybridStack(MegatronModule):
                         f"Unexpected hybrid layer config type: {type(layer_config).__name__}"
                     )
 
+            if self.uses_wide_residual_stream and not getattr(
+                layer, "supports_wide_residual_connections", False
+            ):
+                raise ValueError(
+                    "wide_residual requires HybridStack layer specs to name explicit "
+                    "wide-residual layer classes; "
+                    f"layer {layer_number} constructed {type(layer).__name__}."
+                )
             if self.config.enable_mhc_connections:
                 layer = HyperConnectionHybridLayer(config=layer_config, layer=layer)
             self.layers.append(layer)
@@ -312,6 +326,12 @@ class HybridStack(MegatronModule):
 
         # Required for activation recomputation
         self.num_layers_per_pipeline_rank = len(self.layers)
+
+        self.residual_stream_readout = (
+            build_wide_residual_readout(self.config)
+            if self.post_process and self.uses_wide_residual_stream
+            else None
+        )
 
         if self.post_process and self.post_layer_norm:
             # Final layer norm before output.
@@ -497,6 +517,10 @@ class HybridStack(MegatronModule):
             hidden_states = HyperConnectionModule.input_expand(
                 hidden_states, self.config.mhc_num_residual_streams
             )
+        elif self.uses_wide_residual_stream and self.pre_process:
+            hidden_states = expand_wide_residual_stream(
+                hidden_states, self.config.wide_residual.num_streams
+            )
 
         if inference_context and inference_context.is_static_batching():
             # NOTE(bnorick): match BaseInferenceContext attributes for
@@ -657,6 +681,9 @@ class HybridStack(MegatronModule):
                         hidden_states=hidden_states,
                         is_block_end=mhc_block_ends[layer_idx],
                     )
+
+        if self.residual_stream_readout is not None:
+            hidden_states = apply_module(self.residual_stream_readout)(hidden_states)
 
         mhc_multistream = None
         if self.config.enable_mhc_connections and self.post_process and not self.is_mtp_layer:
