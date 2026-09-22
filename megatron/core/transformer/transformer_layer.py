@@ -932,6 +932,7 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
                     hidden_states,
                     recompute_context,
                     fp32_residual_connection=self.config.fp32_residual_connection,
+                    branch_input_dtype=self.config.params_dtype,
                 )
 
         self.attn_norm_manager = self.off_interface(
@@ -1220,6 +1221,7 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer, TwoStageAt
                     hidden_states,
                     recompute_context,
                     fp32_residual_connection=self.config.fp32_residual_connection,
+                    branch_input_dtype=self.config.params_dtype,
                 )
 
         pre_mlp_layernorm_output = self._forward_pre_mlp_layernorm(
